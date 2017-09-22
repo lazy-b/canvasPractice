@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="zh-cmn-Hans">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>2d文字粒子化效果--仿AlloyTeam</title>
+    <link rel="stylesheet" href="">
+    <style>
+        html, body {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <!-- <canvas id="c1" ></canvas>
+    <canvas id="c2" ></canvas>
+    <canvas id="c3" ></canvas> -->
+    <script>
+        // 使用缓冲canvas绘制心形，然后再使用drawImage能大量提升性能
+        // 参考蓝洞实现，此处不做优化
+        /**
+         *
+         * 自己理解的3d映射2d的原理（透视）：
+         *
+         *  以透视点为原点建立三维直角坐标系
+         *  当屏幕与z轴垂直时
+         *  设距离原点距离为z
+         *  假设屏幕上有一透视点p(x, y);
+         *  则此透视点的三维坐标为p(x, y, z);
+         *  设被透视点的三维坐标为p1(x1, y1, z1);
+         *  根据透视规律，
+         *  透视点在被透视点与原点连成的直线上
+         *  所以：
+         *      x/x1 = y/y1 = z/z1
+         *  得出被透视点在屏幕上的透视点：
+         *      p(x1 * z/z1, y1 * z/z1);
+         *
+         * 当物体运动时，设p1运动到点p2
+         *      设p2为(x2, y2, z2)
+         *
+         *      当物体只远离或者接近观察者时
+         *      即只对z进行dz的改变，
+         *      则：p2为(x1, y1, z1 + dz)
+         *
+         *      当物体只旋转时
+         *      只绕x轴旋转a弧度
+         *          x2 = x1
+         *          y2 = y1 * Math.cos(a) - z1 * Math.sin(a)
+         *          z2 = y1 * Math.sin(a) + z1 * Math.cos(a)
+         *      只绕y轴旋转b弧度
+         *          x2 = z1 * Math.sin(b) + x1* Math.cos(b)
+         *          y2 = y1
+         *          z2 = z1 * Math.cos(b) - x1 * Math.sin(b)
+         *      只绕z轴旋转c弧度
+         *          x2 = x1 * Math.cos(c) - y1 * Math.sin(c)
+         *          y2 = x1 * Math.sin(c) + y1 * Math.cos(c)
+         *          z2 = z1
+         *
+         * 至此，基本可以满足简单的3d物体运动模拟
+         *
+         *
+         */
+        // 使用“构造函数/原型”混合的方式构造类
+        ;(function() {
+            "use strict"
+            var TextParticles = function() {
+
+                // 下面是一些需要用到的工具函数
+
+                // 向下兼容requestAnimFrame
+                window.requesetAnimFrame = function () {
+                    return window.requesetAnimationFrame ||
+                        window.webkitRequestAnimationFrame ||
+                        window.mozRequestAnimationFrame ||
+                        window.oRequestAnimationFrame ||
+                        window.msRequestAnimationFrame ||
+                        function (fn) {
+                            window.setTimeout(fn, 1000/60);
+                        };
+                }();
+
+                /**
+                 * @param  {tarObj}
+                 * @param  {tarObj}
+                 * @param  {Boolean}
+                 * @return {Obj}
+                 * 将source中的属性复制给target
+                 * 如果isOverwrite不传或者传入true
+                 * 则使用source中的属性覆盖target中的同名属性的属性值
+                 */
+                var extend = function(target, source, isOverwrite) {
+                    if (isOverwrite == undefined) {
+                        isOverwrite = true;
+                    }
+
+                    for (var key in source) {
+                        if (!(key in target) || isOverwrite) {
+
+                            // 如果对象的属性值也是对象，则递归调用
+                            if (typeof source[key] == "object") {
+                                extend(target[key], source[key], isOverwrite);
+                            } else {
+                                target[key] = source[key];
+                            }
+                        }
+                    }
+
+                    return target;
+                };
+                // 可以传入id或者dom元素
+                var $ = function(id) {
+                    return document.getElementById(id) || id;
+                };
+                var $$ = function(tag, parent) {
+                    return parent.getElementsByTagName(tag);
+                };
+                var addEvent = function(element, type, handler) {
+                    element.addEventListener ?
+                    element.addEventListener(type, handler, false) :
+                    element.attachEvent("on" + type, function() {
+                        // 修正handler调用时的this
+                        handler.call(element);
+                    });
+                };
+                var removeEvent = function(element, type, handler) {
+                    element.removeEventListener ?
+                    element.removeEventListener(type, handler, false) :
+                    element.detachEvent("on" + type, handler);
+                };
+                var mouseX = 0, mouseY = 0;
+
+                // 初始化
+                var init = function(options) {
+                    this.opt = {
+                        textSize: 200,      // 粒子化后，粒子组成的文本大小
+                        particleSize: 0.04, // 粒子的基础大小
+                        textStyle: {        // 源文本样式，一般只需改动fontFamily
+                            textAlign: "center",
+                            textBaseline: "middle",
+                            fontSize: 20,  // 原始文本字体大小，决定了粒子的数量
+                            fontFamily: "sans-serif"
+                        },
+                        text: "lazy 1993",
+                        drawMethod: "fillText"
+                    }
+                    // 文字可以通过缩小字体的方式而不是将取到的点的数量减少的方式创建粒子
+                    // 故不再需要place计数器
+                    // 如果是图片则需要使用该计数器
+                    // this.place = 0; // 有符合条件的像素点则加一
+                    // 根据传入的options扩展this.opt
+                    extend(this.opt, options);
+                    // 实际初始化操作
+                    var start ,end;
+                    start = + new Date();
+                    this.initialize();
+                    end = + new Date();
+                    // console.log(end - start);
+                }
+
+                // 定义init的方法
+                init.prototype = {
+                    initialize: function() {    // 实际初始化操作
+                        // 如果初始化时传入了canvas的id，则获取这个canvas元素，
+                        // 否则创建一个canvas元素
+                        if (this.opt.canvasId == null) {
+                            this.getCanvas();
+                        } else {
+                            this.canvas = $(this.opt.canvasId);
+                        }
+
+                        // 存储粒子的数组
+                        this.particles = [];
+
+                        // 多组文本各自的填充样式
+                        this.textStyles = [];
+
+                        // 获取canvas绘制上下文
+                        this.ctx = this.canvas.getContext("2d");
+
+                        // 设置画布属性（全屏铺满）
+                        this.setCanvasStyle();
+
+                        // // 设置绘制属性
+                        // this.setTextStyle();
+
+                        // // 绘制文本
+                        // this.drowText();
+                        this.fillText();
+
+                        // 获取文本像素数据
+                        this.getImageDate();
+
+                        // 添加交互动画
+                        this.bindEvent();
+
+                        // 循环动画
+                        this.loop();
+                    },
+                    loop: function() {
+                        var _this = this;
+                        requesetAnimFrame(function() {
+                            _this.loop();
+                        });
+                        this.doFrame(); // 绘制动画帧
+                    },
+                    doFrame: function() {
+                        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                        for (var i = 0; i < this.particles.length; i++) {
+                            var p = this.particles[i];
+                            p.update();
+                        }
+                    },
+                    bindEvent: function() {
+                        var _this = this;
+                        addEvent(this.canvas, "mousemove", function(e) {
+                            mouseX = e.clientX;
+                            mouseY = e.clientY;
+                        });
+                        addEvent(window, "resize", function(e) {
+                            _this.setCanvasStyle();
+                        })
+                    },
+                    getImageDate: function() {
+                        // var pixels = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height),
+                        var pixels,         // 存储源文本图像信息
+                            width, height,  // 设备像素确定的宽和高
+                            sourceWidth, sourceHeight,  // 源文本占据的宽和高
+                            data,   // 像素信息
+                            canvas, // 画布
+                            opt,    // 配置信息
+
+                        sourceWidth = this.sourceWidth;
+                        sourceHeight = this.sourceHeight;
+                        canvas = this.canvas;
+                        opt = this.opt;
+
+                        pixels =this.ctx.getImageData(0, 0, sourceWidth, sourceHeight);
+
+                        var size = opt.textSize,
+                            offsetX = canvas.width/2,
+                            offsetY = canvas.height/2,
+                            rate = size/opt.textStyle.fontSize;
+
+                        width = pixels.width;
+                        height = pixels.height;
+
+                        data = pixels.data;
+
+                        for (var row = 0; row < height; row++ ) {
+                            for (var col = 0; col < width; col++) {
+                                // 取得alpha分量
+                                var i = (row * width + col) * 4;
+
+                                // 如果alpha大于64，即透明度大于0.5，
+                                if (data[i + 3] > 64) {
+                                    // 通过缩小字体的方式而不是将取到的点的数量减少的方式创建粒子
+                                    // 保证了字体粒子化之后还能很清晰的显示出文字
+                                    // (this.place % 4 === 0) && this.particles.push();
+                                    this.particles.push(
+                                        new Particle((col - sourceWidth/2) * rate + offsetX, (row -sourceHeight/2) * rate + offsetY, canvas, rate, opt.particleSize)
+                                        );
+                                }
+                            }
+                        }
+                    },
+                    setCanvasStyle: function() {    // 全屏canvas
+                        this.canvas.width = window.innerWidth;
+                        this.canvas.height = window.innerHeight;
+                    },
+                    getCanvas: function() { // 创建canvas元素
+                        var canvas = document.createElement("canvas");
+                        document.body.appendChild(canvas);
+                        this.canvas = canvas;
+                        return canvas;
+                    },
+                    fillText: function() {
+                        var defaultText = "Welcome",
+                            defaultStyle = {
+                                textAlign: "center",
+                                textBaseline: "middle",
+                                fontSize: 16,
+                                fontFamily: "sans-serif"
+                            },
+                            defaultDrawMethod = "fillText",     // 默认使用填充的方式
+                            _text = this.opt.text || defaultText,
+                            _textAlign = this.opt.textStyle.textAlign || defaultStyle.textAlign,
+                            _textBaseline = this.opt.textStyle.textBaseline || defaultStyle.textBaseline,
+                            _fontSize = this.opt.textStyle.fontSize || defaultStyle.fontSize,
+                            _fontFamily = this.opt.textStyle.fontFamily || defaultStyle.fontFamily,  // 实际设置的样式
+                            _method = this.opt.drawMethod || defaultDrawMethod,
+                            sourceWidth, sourceHeight;  // 源文本区域的宽和高
+
+                        // 设置文字样式
+
+                        this.ctx.textAlign = _textAlign;
+                        this.ctx.textBaseline = _textBaseline;
+                        this.ctx.font = _fontSize + "px " + _fontFamily;
+
+                        // 计算原区域文字的长和高，并存储这两个数据
+                        sourceWidth = this.ctx.measureText(_text).width;
+                        this.ctx[_method](_text, sourceWidth/2, _fontSize/2);
+
+                        this.sourceWidth = sourceWidth;
+                        this.sourceHeight = _fontSize;
+                    }
+                }
+
+                // 图形类（圆）的属性
+                var Particle = function(x, y, canvas, rate, baseSize) {
+                    this.endX = x;              // 文本粒子化时的坐标
+                    this.endY = y;
+                    this.canvas = canvas;
+                    this.ctx = this.canvas.getContext("2d");
+
+                    this.startX = Math.random() * this.canvas.width;    // 文本随机的起始坐标
+                    this.startY = Math.random() * this.canvas.height;
+
+                    this.x = this.startX;   // 粒子由随机位置产生，然后再运动回文字
+                    this.y = this.startY;
+
+                    this.vx = Math.random() * 10 - 5;   // 粒子运动的速度
+                    this.vy = Math.random() * 10 - 5;
+                    this.rate = rate;       // 文字被放大的倍数，放大倍数越小，则粒子也应该越小，一般不要更改
+                    this.baseSize = baseSize || 0.05,  // 粒子的基准大小，可以单独控制每个粒子的大小
+                    this.data = [],             // 存储画小图形需要的控制点坐标
+                    this.num = 6,               // 设置小图形由多少段贝塞尔曲线组成
+                    this.color = {              // 粒子生成时的颜色
+                        R : 233,
+                        G : 123,
+                        B : 66,
+                        A : 1
+                    }
+                }
+
+                // 图形类的方法
+                Particle.prototype = {
+                    move: function() {
+                        var disX = this.endX - this.x,
+                            disY = this.endY - this.y,
+                            dis = Math.sqrt(Math.pow(disX, 2) + Math.pow(disY, 2)),
+                            force = dis * 0.01,
+                            angle = Math.atan2(disY, disX);
+
+                        var mouseF = 0,
+                            mouseA = 0;
+
+                        if (mouseX > 0 && mouseY > 0) {
+                            var dis = Math.pow((this.x - mouseX), 2) + Math.pow((this.y - mouseY), 2);
+                            mouseF = Math.min(5000/dis, 5000);
+                            mouseA = Math.atan2(this.y - mouseY, this.x - mouseX);
+                        } else {
+                            mouseF = 0;
+                            mouseA = 0;
+                        }
+
+                        this.vx += force * Math.cos(angle) + mouseF * Math.cos(mouseA);
+                        this.vy += force * Math.sin(angle) + mouseA * Math.sin(mouseA);
+
+                        this.vx *= 0.92;
+                        this.vy *= 0.92;
+
+                        this.x += this.vx;
+                        this.y += this.vy;
+                    },
+                    create: function() {    // 如果是圆形或者矩形或者只做二维效果，可以不用这个方法
+                        var t = [], // 存储等分的弧度数组
+                            p = [], // 存储控制点的坐标信息
+                            i;
+
+                        var step = (360/this.num)/3;
+
+                        var r = this.baseSize * this.rate,
+                            x = this.x,
+                            y = this.y;     // 避免在for循环中频繁访问this
+
+                        this.data = [];     // 清除上次计算的数据
+
+                        // 计算得到画每个心形所需要的控制点
+                        for (i = 0; i <= 360; i += step) {
+                            t[i] = i * Math.PI/180;
+                            this.data.push({
+                                x : getX(t[i], r, x),
+                                y : getY(t[i], r, y)
+                            });
+                        }
+
+                        // this.data = p;
+
+                        function getX(t, n, offsetX) {
+                            return 16 * Math.pow(Math.sin(t), 3) * n + offsetX;
+                        }
+                        function getY(t, n, offsetY) {
+                            var y;
+                            y = (13*Math.cos(t) - 5 * Math.cos(t * 2) - 2 * Math.cos(t * 3) - Math.cos(t * 4)) * n - offsetY;
+                            return -y;
+                        }
+                    },
+                    render: function() {    // 渲染每个图形
+                        var ctx = this.ctx,
+                            p = this.data,
+                            color = this.color,
+                            num = this.num,
+                            i, j;
+
+                        ctx.beginPath();
+                        ctx.moveTo(p[0].x, p[0].y);
+                        // 绘制心形路径
+                        for (i = 0, j = 0; i < num; i += 1){
+                            j = i * 3;
+                            ctx.bezierCurveTo(p[j + 1].x, p[j + 1].y, p[j + 2].x, p[j + 2].y, p[j + 3].x, p[j + 3].y);
+                        }
+
+                        ctx.closePath();
+                        ctx.fillStyle = "rgba(" + color.R + "," + color.G + "," + color.B + "," + color.A + ")";
+                        ctx.fill();
+
+                        // this.ctx.beginPath();
+                        // this.ctx.fillStyle = "#111";
+                        // // this.ctx.fillRect(this.x, this.y, 10, 10);
+                        // this.ctx.arc(this.x, this.y, 5, Math.PI * 0, Math.PI * 2);
+                        // this.ctx.closePath();
+                        // this.ctx.fill();
+                    },
+                    update: function() {
+                        this.move();        // 改变粒子的x和y坐标
+                        this.create();      // 根据粒子的形状和x、y坐标，创建出新的粒子
+                        this.render();      // 渲染创建出的粒子
+                    }
+                }
+                return init;
+            }();
+            onload = function() {
+                new TextParticles();
+            }
+        }())
+
+        // 先把画布充满屏幕
+        function aa() {
+            var c1 = document.getElementById('c1');
+
+            c1.setAttribute("height",window.innerHeight);
+            c1.setAttribute("width",window.innerWidth);
+        }
+
+        // 绘制规则多边形
+        function bb() {
+            var c1 = document.getElementById('c1'),
+                ctx = c1.getContext("2d"),
+                defaultZ = 300;     // 默认投影面的z
+
+            // 根据该点在三维坐标系下的坐标
+            // 以及投影面的z
+            // 确定该点在投影面上的二维坐标
+            // x1、y1、z1：实际的点
+            // x2、y2、z2：被投影在投影面上的点
+            function getPositionIn2D(parameters) {
+                var pos2d = {},
+                    x1 = parameters.x1,
+                    y1 = parameters.y1,
+                    z1 = parameters.z1,
+                    z2 = parameters.z2 || defaultZ,  // 默认起始的z为300
+                    x2, y2;     // 求出的在视口（屏幕）上的坐标
+
+                x2 = x1 * z2/z1;
+                y2 = y1 * z2/z1;
+
+                return pos2d = {
+                    x : x2,
+                    y : y2
+                };
+            }
+
+            // 根据该点在投影面上的二维坐标
+            // 以及投影面的z
+            // 并给出该点的z坐标
+            // 确定该点在三维坐标系下的坐标
+            // x1、y1、z1：实际的点
+            // x2、y2、z2：被投影在投影面上的点
+            function getPositionIn3D(parameters) {
+                var pos3d = {},
+                    x2 = parameters.x2,
+                    y2 = parameters.y2,
+                    z2 = parameters.z2 || 300,  // 默认起始的z为300
+                    z1 = parameters.z1 || (Math.random() * 200 + 200),  // 没有给定3维坐标下的z则在200到400之间随机生成
+                    x1, y1;     // 求出的在视口（屏幕）上的坐标
+
+                x1 = x2 * z1/z2;
+                y1 = y2 * z1/z2;
+
+                return pos3d = {
+                    x : x1,
+                    y : y1,
+                    z : z1
+                };
+            }
+
+            /**
+             * @param  {object}
+             * @return {object}
+             * x、y、z：为原始坐标
+             * dx、dy、dz：为平移分量
+             * angleX、angleY、angleZ：为旋转角度分量
+             * 角度分量一次只需传入两个，但是为了计算方便可以传入三个分量
+             */
+            function changePosition(parameters) {
+                var pos3d = {},
+                    x = parameters.x || 0,  // 避免报错
+                    y = parameters.y || 0,
+                    z = parameters.z || (parameters.z === 0) ? 0 : defaultZ,
+                    dx = parameters.dx || 0,    // 不传入增量则增量为0
+                    dy = parameters.dy || 0,
+                    dz = parameters.dz || 0,
+                    angleX = parameters.angleX || 0,    // 绕X轴旋转角度
+                    angleY = parameters.angleY || 0,    // 绕Y轴旋转角度
+                    angleZ = parameters.angleZ || 0,    // 绕Z轴旋转角度
+                    a, b, c,            // 计算中间量
+                    x2, y2, z2;         // 计算出运动后的坐标
+
+                // 先做平移运动
+                x2 = a = x + dx;
+                y2 = b = y + dy;
+                z2 = c = z + dz;
+
+                // 再做旋转
+                if (!angleX) {  // 存在绕x轴旋转分量
+                    angleX *= Math.PI/180;  // 转换为弧度
+
+                    x2 = a;
+                    y2 = b * Math.cos(angleX) - c * Math.sin(angleX);
+                    z2 = b * Math.sin(angleX) + c * Math.cos(angleX);
+                    a = x2, b = y2, c = z2;
+                }
+                if (!angleY) {  // 存在绕y轴旋转分量
+                    angleY *= Math.PI/180;  // 转换为弧度
+
+                    x2 = c * Math.sin(angleY) + a * Math.cos(angleY);
+                    y2 = b;
+                    z2 = c * Math.cos(angleY) - a * Math.sin(angleY);
+                    a = x2, b = y2, c = z2;
+                }
+                if (!angleZ) {  // 存在绕z轴旋转分量
+                    angleZ *= Math.PI/180;  // 转换为弧度
+
+                    x2 = a * Math.cos(angleZ) - b * Math.sin(angleZ);
+                    y2 = a * Math.sin(angleZ) + b * Math.cos(angleZ);
+                    z2 = c;
+                    a = x2, b = y2, c = z2;
+                }
+
+                return pos3d = {
+                    x : x2,
+                    y : y2,
+                    z : z2
+                };
+            }
+
+            // 绘制正多边形的函数
+            function polygon(c, n, x, y, r, angle, counterclockwise)  {
+                var delta = 2 * Math.PI/n,  // 两个顶点之间的夹角
+                    i;
+                angle = angle || 0;
+                counterclockwise = counterclockwise || false;
+                // 从第一个顶点开始一条新的子路径，使用三角法计算位置
+                c.moveTo((x + r * Math.sin(angle)), (y - r * Math.cos(angle)));
+                // 循环剩余的每个顶点
+                for(i = 1; i < n; i += 1) {
+                    angle += counterclockwise ? -delta : delta;
+                    c.lineTo((x + r * Math.sin(angle)), (y - r * Math.cos(angle)));
+                }
+                c.closePath();  // 将最后一个顶点和起点连接起来
+            }
+
+            function rainbow(maxWidth) {
+                var colors = ["#f00", "#ff7d00", "#ff0", "#0f0", "#00f", "#0ff", "#f0f"],
+                    width = maxWidth,
+                    length, step,
+                    i;
+
+                length = colors.length;
+                step = maxWidth/length;
+                for (i = 0; i < length; i += 1) {
+                    ctx.strokeStyle = colors[i];
+                    ctx.lineWidth = width;
+                    ctx.stroke();
+                    width -= step;
+                }
+            }
+
+            ctx.beginPath();
+            polygon(ctx, 3, 70, 80, 50);
+            polygon(ctx, 4, 200, 70, 50, Math.PI/4);
+            polygon(ctx, 5, 330, 65, 50);
+            polygon(ctx, 6, 460, 63, 50, Math.PI/6);
+            polygon(ctx, 7, 590, 63, 50, 0, true);
+            var a = new Date();
+            polygon(ctx, 1000000, 300, 300, 50, 0, true);
+            var b = new Date();
+            console.log(b - a);
+            rainbow(20);
+            // ctx.beginPath();
+            // polygon(ctx, 8, 50, 70, 50);
+            // rainbow(30);
+            // ctx.beginPath();
+            // polygon(ctx, 9, 50, 70, 50);
+            // rainbow(30);
+            // ctx.beginPath();
+            // polygon(ctx, 10, 50, 70, 50);
+            // rainbow(30);
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-cmn-Hans">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>扩散的圆</title>
+    <link rel="stylesheet" href="">
+    <style>
+        #main{
+            width: 20px; 
+            height: 20px;
+            background: red;
+            position: absolute;
+            left: 300px;
+            top: 300px;
+        }
+        .box{
+            width: 1px; 
+            height: 1px;
+            background: black;
+            position: absolute;
+            left: 300px;
+            top: 300px;
+        }
+        body{
+            background: black;
+        }
+        #c1{
+            background: white;
+        }
+        #c2{
+            background: white;
+        }
+    </style>
+</head>
+<body>
+    <div id="main">
+    </div>
+    <!-- canvas运动原理，每次都擦除画布然后重新绘制 -->
+    <canvas id="c1" width="400" height="400"></canvas>
+    <!-- 多物体运动核心，存储多物体的数据 -->
+    <canvas id="c2" width="400" height="400"></canvas>
+    <script>
+        (function() {
+            var c2 = document.getElementById('c2'),
+                ctx = c2.getContext("2d"),
+                num = 0, 
+                setDate = [],
+                timer1, timer2;
+
+            
+
+            // 物体的运动
+            timer1 = setInterval(function() {
+                var i;
+                ctx.clearRect(0, 0, c1.width, c1.height);
+
+                for (i = 0; i < setDate.length; i += 1) {
+                    setDate[i].r += 1;
+                    setDate[i].A -= 0.01;
+                    if (setDate[i].A < 0.01) {
+                        setDate.splice(i,1);
+                        console.log(setDate.length);
+                    }
+                }
+                    
+                // 循环存储的数据
+                for (i = 0; i < setDate.length; i += 1) {
+                    // 绘制单个物体的运动
+                    ctx.fillStyle = "rgba(" + setDate[i].R + "," + setDate[i].G + "," + setDate[i].B + "," + setDate[i].A + ")";
+                    ctx.beginPath();
+                    // ctx.moveTo(100, 100);
+                    ctx.arc(setDate[i].x, setDate[i].y, setDate[i].r, 0, 360*Math.PI/180);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }, 30);
+
+            // 保存多物体的数据
+            timer2 = setInterval(function() {
+                var x = Math.random() * c2.width,
+                    y = Math.random() * c2.height,
+                    r = Math.random() * 6 + 3,
+                    R = Math.floor(Math.random() * 256),
+                    G = Math.floor(Math.random() * 256),
+                    B = Math.floor(Math.random() * 256),
+                    A = Math.random() * 0.5 + 0.5 ;
+                setDate.push({
+                    x : x,
+                    y : y,
+                    r : r,
+                    R : R,
+                    G : G,
+                    B : B,
+                    A : A
+                });
+            }, 200);
+
+        })
+
+        (function() {
+            var c1 = document.getElementById('c1'),
+                width = c1.width,
+                height = c1.height,
+                ctx = c1.getContext("2d"),
+                num = 0, 
+                timer;
+
+            timer = setInterval(function() {
+                ctx.clearRect(0, 0, width, height);
+                num += 1;
+                ctx.strokeRect(num, num, 100, 100);
+                if (num > 100) {
+                    clearInterval(timer);
+                }
+            }, 30);
+
+        }())
+        
+    </script>
+    <script>
+        (function() {
+            var div = document.getElementById('main'),
+                L = 300,
+                T = 300,
+                num = 0,
+                step = 50,
+                A = 200,
+                box, timer;
+
+            timer = setInterval(function() {
+                num += 1;
+                div.style.left = num * Math.PI/180 * step + L + "px";
+                div.style.top = -A * Math.sin(num * Math.PI/180) + T + "px";
+                box = document.createElement("div");
+                box.className = "box";
+                box.style.left = div.offsetLeft + "px";
+                box.style.top = div.offsetTop + "px";
+                document.body.appendChild(box);
+                if ((num * Math.PI/180 * step + L) > 1000) {
+                    clearInterval(timer);
+                }
+            }, 30);
+        }())
+    </script>
+</body>
+</html>

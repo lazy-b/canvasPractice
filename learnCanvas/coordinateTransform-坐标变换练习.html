@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-cmn-Hans">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>绘制立方体</title>
+    <link rel="stylesheet" href="">
+    <style>
+        *{
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="c1" ></canvas>
+    <!-- <canvas id="c2" ></canvas>
+    <canvas id="c3" ></canvas> -->
+    <!-- canvas运动原理，每次都擦除画布然后重新绘制 -->
+    <!-- 多物体运动核心，存储多物体的数据 -->
+    <script>
+        // 先把画布充满屏幕
+        ;(function() {
+            var c1 = document.getElementById('c1');
+
+            c1.setAttribute("height",window.innerHeight);
+            c1.setAttribute("width",window.innerWidth);
+        }())
+        
+        // 绘制规则多边形
+        // 第一种使用旋转坐标递归绘制
+        // 第二种通过计算坐标暴力绘制
+        // 第一种实现更优美，但是起点和终点理论上应该重合但是实际绘制无法重合
+        // 第二种起点和终点能够重合，且效率比第一种高
+        // 同样绘制10级的科赫雪花函数图形，第二种耗时3900毫秒左右，第一种则在5400左右
+        ;(function() {
+            var c1 = document.getElementById('c1'),
+                ctx = c1.getContext("2d");
+
+            // 绘制立方体
+            // c ：画布绘制上下文
+            // x、y ：最前面那个面的右上坐标
+            // a、b、c ：长宽高（最前面那个面两条边为长和高）
+            function drowCube(c, x, y, la, lb, lc) {
+                var deg = Math.PI/180,
+                    angle1 = 60 * deg,   // 需要旋转的两个角度的弧度值
+                    angle2 = -120 * deg;
+
+                ctx.beginPath();
+                c.save();
+                c.translate(x, y);      // 变换原点为起始点
+                c.moveTo(0, 0);         // 从新的原点开始一条新的子路径
+                c.rect(-la, 0, la, lc);    // 绘制最前面那个面
+                c.restore();               // 保存当前变换
+                c.save();
+                c.translate(x, y);      // 变换原点为起始点
+                c.transform(Math.cos(Math.PI/180 * 330), Math.sin(Math.PI/180 * 330), -Math.sin(0), Math.cos(0), 0, 0);
+                c.rect(0, 0, lb, lc);    // 绘制右侧那个面
+                c.restore();            // 恢复初始变换
+                c.save();
+                c.translate(x, y);      // 变换原点为起始点
+                c.transform(Math.cos(0), Math.sin(0), -Math.sin(Math.PI/180 * 240), Math.cos(Math.PI/180 * 240), 0, 0);
+                c.rect(-la, 0, la, lb);    // 绘制上方那个面
+                c.restore();            // 恢复初始变换
+                c.closePath();
+                c.strokeStyle = "pink";
+                c.stroke();
+            }
+
+            function rainbow(maxWidth) {
+                var colors = ["#f00", "#ff7d00", "#ff0", "#0f0", "#00f", "#0ff", "#f0f"],
+                    width = maxWidth, 
+                    length, step,
+                    i;
+
+                length = colors.length;
+                step = maxWidth/length;
+                for (i = 0; i < length; i += 1) {
+                    ctx.strokeStyle = colors[i];
+                    ctx.lineWidth = width;
+                    ctx.stroke();
+                    width -= step;
+                }
+            }
+
+            
+            drowCube(ctx, 400, 300, 300, 200, 100);
+            // rainbow(20);
+            drowCube(ctx, 400, 300, 250, 150, 50);
+            // drowCube(ctx, 300, 300, 300, 200, 100);
+            // drowCube(ctx, 450, 300, 300, 200, 100);
+            // drowCube(ctx, 500, 300, 300, 200, 100);
+        }())
+    </script>
+</body>
+</html>

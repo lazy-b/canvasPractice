@@ -1,0 +1,519 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge">
+    <title>蓝洞</title>
+    <style>
+        html,body {
+          margin: 0;
+          padding: 0;
+          overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="can" class="canvasjs-canvas" width="500" height="500"></canvas>
+    <script>
+        window.onload = function() {
+            "use strict"
+            // 合理退化
+            window.requesetAnimFrame = function () {
+                return window.requesetAnimationFrame ||
+                    window.webkitRequestAnimationFrame ||
+                    window.mozRequestAnimationFrame ||
+                    window.oRequestAnimationFrame ||
+                    window.msRequestAnimationFrame ||
+                    function (fn) {
+                        window.setTimeout(fn, 1000/60);
+                    };
+            }();
+            /**
+             * 图形类
+             * @param {obj} para 初始化图形类的一些参数
+             */
+            var LineTree = function LineTree(para) {
+                this.branchNum = para.branchNum || 12;  // 分支数量
+                this.r = para.r || 50;  // 图形外廓大小，最长主枝的长度
+                this.lScale = para.lScale || 0.75;  // 主枝与它直接分支的长度比例
+                this.maxDepth = para.maxDepth || 5;  // 树的最大分支深度
+
+                this.angle = para.angle || 45;  // 分支和主枝的夹角
+                this.dAngle = para.dAngle || 1;  // 图形分支之间夹角变化量，（单位为度）
+                this.maxAngle = para.maxAngle || 90;  // 分支和主枝的最大夹角
+                this.minAngle = para.minAngle || 0;
+
+                // this.hScale = para.hScale || 0.5;  // 主枝长度与分支起点距主枝起点的比例
+                // this.dHScale = para.dHScale || 0.01;    // 距离的比例的变化速率
+                // this.maxHScale = para.maxHScale || 0.9;  // 分支和主枝起点的最大距离比例
+                // this.minHScale = para.minHScale || 0.1;
+                // angle的范围为0~90，而hScale的范围为0~1
+                this.hScale = this.angle/(90 - 0) * (1 - 0);
+
+                this.canvas = para.canvas;
+                this.ctx = para.ctx;
+                // 不传入宽高的情况下则是作为缓存画布，
+                // 此时取一个尽可能小的宽高
+                this.canvas.width = para.width || this.maxDepth * this.r *
+                                           this.lScale * 2;
+                this.canvas.height = para.height || this.maxDepth * this.r *
+                                           this.lScale * 2;
+
+                this.arcR = para.arcR || 3;      // 球顶部小球的半径
+                this.alpha = para.alpha || 0.2; // 画布透明度
+
+                // 图形整体起始的角度，默认为从0度开始转动
+                this.roataeAngle = para.roataeAngle || 0;
+                // 图形整体转动的变化量（每帧），默认每帧转1度
+                this.dRotateAngle = para.dRotateAngle || 1/180;
+                // true为逆时针转动，默认为顺时针
+                this.counterclockwise = !!para.counterclockwise;
+                // 如果设置为逆时针转动，则将this.dRotateAngle设为相反数
+                this.dRotateAngle = this.counterclockwise ? -this.dRotateAngle :
+                                    this.dRotateAngle;
+
+                // 是否停止转动，默认不停止
+                this.stop = !!para.stop;
+
+                this.cacheCanvas = document.createElement("canvas");
+                this.cacheCtx = this.cacheCanvas.getContext("2d");
+                // 假设分支长度不能大于主枝长度
+                // 分支最长绝对小于2 * this.maxDepth * this.r
+                // 分支最宽占据(this.maxDepth + 1) * this.r
+                this.cacheCanvas.width = 2 * this.maxDepth * this.r *
+                                         this.lScale * this.hScale;
+                this.cacheCanvas.height = (this.maxDepth + 1.1) * this.r *
+                                           this.lScale;
+
+                // 插入body中方便调试
+                // document.body.appendChild(this.cacheCanvas);
+                // document.body.appendChild(this.canvas);
+            };
+            /**
+             * 图形类的原型方法
+             * @type {obj} 直接赋值给一个对象
+             */
+            LineTree.prototype = {
+                init: function() {
+                    this.cache();
+                    this.render();
+                    // this.loop();
+                },
+                // 绘制缓存图像
+                cache: function() {
+                    var _this = this,
+                        para = {
+                            arcR: _this.arcR,
+                            canvas: _this.cacheCanvas,
+                            ctx: _this.cacheCtx,
+                            l: _this.r,
+                            lScale: _this.lScale,
+                            hScale: _this.hScale,
+                            depth: _this.maxDepth,
+                            maxDepth: _this.maxDepth,
+                            angle: _this.angle
+                        };
+                    // 绘制枝桠的递归函数
+                    var drawBranch = function draw(para) {
+                        // 传入的参数
+                        var arcR = para.arcR,
+                            canvas = para.canvas,
+                            ctx = para.ctx,
+                            lScale = para.lScale,
+                            hScale = para.hScale,
+                            l = para.l,
+                            h = l * hScale,
+                            depth = para.depth,
+                            maxDepth = para.maxDepth,
+                            angle = para.angle;
+
+                        // 中间计算量
+                        var radian1 = Math.PI/180 * angle,        // 夹角的弧度值
+                            radian2 = Math.PI/180 * (360 - angle),
+                            newH, newL, // 下一级细枝的长度和高度
+                            H, S, L,    // hsl颜色的三个色相(H)、饱和度(S)、明度(L)颜色通道值
+                            lineColor, arcColor,
+                            para;
+
+                        // ~~作用是直接抹掉小数部分转换为整数
+                        // 根据细枝和对应主枝起点之间的距离来确定H通道值
+                        H = ~~(360 * h/l);
+                        S = 50;
+                        // 根据细枝的深度确定L通道值
+                        L = (0 + ~~((depth/(maxDepth + 1)) * 50));
+
+                        // 线和小球共用H、S通道值，
+                        // 小球的L通道值固定为50%
+                        lineColor = "hsl(" + H + "," + S + "%," + L + "%)";
+                        arcColor = "hsl(" + H + "," + S + "%, 50%)";
+
+                        // 只画一条线加上一个小圆
+                        if (depth >= 0) {
+                            ctx.save();
+
+                            // 绘制线
+                            ctx.strokeStyle = lineColor;
+                            ctx.beginPath();
+                            ctx.moveTo(0, 0);
+                            ctx.lineTo(0, -l);
+                            ctx.stroke();
+                            ctx.closePath();
+                            // 绘制小圆
+                            ctx.beginPath();
+                            ctx.fillStyle = arcColor;
+                            ctx.arc(0, -l, arcR, 0, Math.PI * 2, false);
+                            ctx.fill();
+
+                            ctx.restore();
+                        }
+
+                        // 绘制两个对称的枝桠
+                        if (depth > 0) {
+
+                            // ~~作用是直接抹掉小数部分转换为整数
+                            // 分支深度为depth时，分支的长度
+                            newL = ~~(l * lScale);
+
+                            para = {
+                                arcR: arcR,
+                                canvas: canvas,
+                                ctx: ctx,
+                                l: newL,
+                                h: newH,           // depth为0时h也为零
+                                lScale: lScale,
+                                hScale: hScale,
+                                depth: (--depth),
+                                maxDepth: maxDepth,
+                                angle: angle
+                            };
+
+                            // 移动坐标轴原点到分支的起点
+                            ctx.translate(0, -h);
+                            // 保存此时的状态，保证分支一直往上延伸
+                            ctx.save();
+                            ctx.rotate(radian1);
+                            draw(para);
+                            ctx.restore();
+
+                            ctx.save();
+                            // ctx.translate(0, -h);
+                            ctx.rotate(radian2);
+                            draw(para);
+                            ctx.restore();
+                        }
+                    }
+                    this.cacheCtx.save();
+                    this.cacheCtx.translate(this.cacheCanvas.width/2,
+                                            this.cacheCanvas.height);
+                    drawBranch(para);
+                    this.cacheCtx.restore();
+                },
+                // 绑定交互事件
+                bind: function() {
+
+                },
+                // 图形自动变形的规律：
+                // 主枝与分支的夹角由最大值变化为最小值
+                // 同时this.sHcale由最大值变化为最小值
+                update: function() {
+                    // 图形收缩展开
+                    if ((this.angle > this.maxAngle && this.dAngle > 0) ||
+                        (this.angle < this.minAngle && this.dAngle < 0)) {
+                        this.dAngle = -this.dAngle;
+                    }
+                    this.angle += this.dAngle;
+
+                    // 分枝在主枝上上下游动
+                    // if ((this.hScale > this.maxHScale && this.dHScale > 0) ||
+                    //     (this.hScale < this.minHScale && this.dHScale < 0)) {
+                    //     this.dHScale = -this.dHScale;
+                    // }
+                    // this.hScale += this.dHScale;
+
+                    // 实现hScale和angle的联动
+                    // 保证angle最小的时候hScale也最小，反之也一样
+                    this.hScale = this.angle/90;
+                },
+                // 图形整体缓慢转动
+                rotate: function() {
+                    if (!this.stop) {
+                        this.roataeAngle += this.dRotateAngle;
+                    }
+                },
+                render: function() {
+                    var num = this.branchNum,
+                        dRadian = Math.PI * 2/num,
+                        cacheCanvas = this.cacheCanvas,
+                        cacheWidth = cacheCanvas.width,
+                        cacheHeight = cacheCanvas.height,
+                        ctx = this.ctx,
+                        i, radian;
+
+                    ctx.save();
+                    // 在画布正中心绘制
+                    ctx.translate(this.canvas.width/2, this.canvas.height/2);
+                    ctx.rotate(this.roataeAngle);
+
+                    for (i = 0, radian = 0; i < num; i++) {
+                        ctx.save();
+                        ctx.rotate(radian);
+                        ctx.drawImage(cacheCanvas ,  -cacheWidth/2,
+                            -cacheHeight);
+                        ctx.restore();
+                        radian += dRadian;
+                    }
+                    ctx.restore();
+                },
+                doFrame: function() {
+                    var _this = this;
+
+                    this.cacheCtx.clearRect(0, 0, this.cacheCanvas.width,
+                                    this.cacheCanvas.height);
+                    this.cacheCtx.globalAlpha = this.alpha;
+                    // 更新图形形状
+                    this.update();
+                    // 绘制缓存图像
+                    this.cache();
+                    // 清除画布
+                    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                    this.ctx.save();
+                    // 移动中心点位置
+                    // this.move();
+                    // 旋转
+                    this.rotate();
+                    // 绘制完整图形
+                    this.render();
+                    this.ctx.restore();
+                },
+                loop: function loop() {
+                    var _this = this;
+
+                    // 绘制帧
+                    this.doFrame();
+
+                    requesetAnimFrame(loop.bind(_this));
+                }
+            };
+            /**
+             * 场景类
+             * @param {obj} para 初始化场景类的一些参数
+             */
+            var Stage = function Stage(para) {
+                // 画布id
+                this.id = para.id;
+                // 画布中粒子的数量
+                this.num = para.num;
+                // 图形集合
+                this.particles = [];
+                // 缓存图形个数，默认缓存5个
+                this.cacheNum = para.cacheNum || 5;
+                // 缓存的图形数组
+                this.cacheParticles = [];
+            };
+            Stage.prototype = {
+                init: function() {
+                    this.getCanvas();
+                    this.setCanvasStyle();
+                    this.getCacheParticles();
+                    this.getParticles();
+                    this.loop();
+                },
+                loop: function loop() {
+                    var _this = this;
+                    this.doFrame(); // 绘制动画帧
+                    // requesetAnimFrame(function() {
+                    //     _this.loop();
+                    // });
+                    // if (!this.num) {
+                    //     setTimeout(function() {
+                    //         requesetAnimFrame(loop.bind(_this))
+                    //     }, 3000);
+                    //     this.num = 1;
+                    // } else {
+                        requesetAnimFrame(loop.bind(_this));
+                    // }
+                },
+                doFrame: function() {
+
+                    this.update();
+                    this.move();
+                    this.render();
+                },
+                // 绘制需要的图形
+                render: function() {
+                    var particles = this.particles,
+                        len = particles.length,
+                        canvas = this.canvas,
+                        ctx = this.ctx,
+                        p, can,
+                        i;
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    // 循环改动x、y坐标
+                    for (i = 0; i < len; i++) {
+                        p = particles[i];
+                        can = p.cacheParticle.canvas;
+                        ctx.save();
+                        // 在x、y处绘制
+                        ctx.translate(p.x, p.y);
+                        ctx.drawImage(can,  -can.width/2,
+                            -can.height/2);
+                        ctx.restore();
+                    }
+                },
+                // 移动中心点位置
+                move: function() {
+                    var particles = this.particles,
+                        canvas = this.canvas,
+                        len = particles.length,
+                        p,
+                        i;
+
+                    // 循环改动x、y坐标
+                    for (i = 0; i < len; i++) {
+                        p = particles[i];
+
+                        if ((p.x > canvas.width && p.vx > 0) ||
+                            (p.x < 0 && p.vx < 0)) {
+                            p.vx = -p.vx;
+                        }
+                        p.x += p.vx;
+
+                        if ((p.y > canvas.height && p.vy > 0) ||
+                            (p.y < 0 && p.vy < 0)) {
+                            p.vy = -p.vy;
+                        }
+                        p.y += p.vy;
+                    }
+                },
+                // 更新缓存图形
+                update: function() {
+                    var cacheParticles = this.cacheParticles,
+                        len = cacheParticles.length,
+                        i;
+
+                    // 更新缓存图形
+                    for (i = 0; i < len; i++) {
+                        // 绘制粒子的帧
+                        cacheParticles[i].doFrame();
+                    }
+                },
+                // 添加交互事件，暂时不添加
+                bind: function() {
+
+                },
+                // 获取canvas元素，根据提供的id或者创建一个
+                getCanvas: function() {
+                    var canvas, body, width, height;
+                    if (document.getElementById(this.id)) {
+                        canvas = document.getElementById(this.id);
+                    } else {
+                        canvas = document.createElement("canvas");
+                        body = document.getElementsByTagName("body")[0];
+                        body.appendChild(canvas);
+                    }
+                    this.canvas = canvas;
+                    this.ctx = canvas.getContext("2d");
+                },
+                // 设置画布属性（全屏铺满）
+                setCanvasStyle: function() {
+                    // 设置宽高
+                    this.canvas.width = window.innerWidth;
+                    this.canvas.height = window.innerHeight;
+
+                    // 设置背景
+                    var canvas = document.createElement("canvas"),
+                        body = document.getElementsByTagName("body")[0],
+                        ctx = canvas.getContext("2d"),
+                        peekhole;
+                    canvas.style.cssText = "position: absolute;left: 0;top: 0;z-index: -1;"
+                    body.appendChild(canvas);
+                    canvas.width = window.innerWidth;
+                    canvas.height = window.innerHeight;
+                    // 设置圆渐变
+                    peekhole = ctx.createRadialGradient(canvas.width/2, canvas.height/2,
+                               1, canvas.width/2, canvas.height/2,  canvas.height);
+
+                    peekhole.addColorStop(0.0, "rgba(2, 15, 60, 1)");
+                    peekhole.addColorStop(0.5, "rgba(2, 15, 60, 1)");
+                    peekhole.addColorStop(0.7, "rgba(7, 86, 200, 1)");
+                    peekhole.addColorStop(1.0, "rgba(200, 260, 260, 1)");
+                    ctx.fillStyle = peekhole;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                },
+                getCacheParticles: function() {
+                    var particles = [],
+                        cacheParticles = [],
+                        para = null, // 初始化粒子参数
+                        cacheCanvas, cacheCtx,
+                        p,
+                        num, i;
+
+                    // 如果缓存数量大于或者等于需要的图形数
+                    // 则直接创建需要的图形数
+                    // 否则，先创建缓存数量个图形数
+                    // 然后循环读取该缓存存入需要的图形数组中
+                    num = Math.min(this.cacheNum, this.num);
+
+                    for (i = 0; i < num; i++) {
+                        cacheCanvas = document.createElement("canvas");
+                        cacheCtx = cacheCanvas.getContext("2d");
+                        para = {
+                            canvas: cacheCanvas,
+                            ctx: cacheCtx,
+                            branchNum: randomInt(12, 22),  // 树的数量
+                            r: randomInt(20, 40),  // 图形外廓大小，最长主枝的长度
+                            // maxDepth: randomInt(5, 5),  // 树的最大分支深度
+                            maxDepth: randomInt(4, 6),  // 树的最大分支深度
+                            alpha: randomFloat(0.1, 0.2), // 小图形透明度
+                            // lScale: randomFloat(0.7, 0.8),  // 主枝与它直接分支的长度比例
+                            dAngle: randomFloat(0.5, 1.5),  // 图形分支之间夹角变化量，（单位为度）
+                            angle: randomInt(20, 70),  // 分支和主枝的夹角
+                            // maxAngle: randomInt(70, 90),  // 分支和主枝的最大夹角
+                            maxAngle: 90,  // 分支和主枝的最大夹角
+                            minAngle: 0,
+                            // minAngle: randomInt(0, 20),
+                            arcR: randomInt(1, 5)      // 球顶部小球的半径
+                        };
+                        p = new LineTree(para);
+                        p.init();
+                        this.cacheParticles.push(p);
+                    }
+
+                    function randomInt(min, max) {
+                        return ~~(0.5 + Math.random() * (max - min) + min);
+                    }
+                    function randomFloat(min, max) {
+                        return (Math.random() * (max - min) + min);
+                    }
+                },
+                getParticles: function() {
+                    var num = this.num,
+                        cacheNum = this.cacheNum,
+                        cacheParticles = this.cacheParticles,
+                        canvas = this.canvas,
+                        i, j;
+
+                    // 获得实际需要的图形
+                    for (i = 0; i < num; i++) {
+                        j = i % cacheNum;
+                        this.particles[i] = {
+                            cacheParticle: cacheParticles[j],
+                            x: ~~(Math.random() * canvas.width),
+                            y: ~~(Math.random() * canvas.height),
+                            vx: (Math.random() * 6 - 3),
+                            vy: (Math.random() * 6 - 3)
+                        };
+                    }
+                }
+            };
+            var stage = new Stage({
+                id: "can",
+                num: 40,
+                cacheNum: 5
+            });
+            stage.init();
+        }
+    </script>
+</body>
+</html>
